@@ -1,0 +1,224 @@
+---
+title: "Simulation Study on Resampling methods"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+This simulation study will help you understand why you should never use the same dataset to fit and evaluate your model. Furthermore, I will compare performance of validation set and cross-validation approaches. 
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(ggplot2);
+options(digits=3);
+options(scipen=999);
+
+```
+
+## 1. Generate sample data
+Write function that generates the sample data.
+```{r}
+set.seed(90) 
+#generate random variables
+x <- sort(rnorm(200, mean = 0, sd = 1))
+u <- rnorm(200, mean = 0, sd = 1)
+
+gen_samples<-function(x,u){
+  #simulate data
+  y <- (1 + x^3 + u)
+  
+  #save data as dataframe and set column names:
+  data <- as.data.frame(cbind(x,y))
+  colnames(data) <-c("x","y")
+  
+  return(data)
+}
+
+#generate data:
+data <- gen_samples(x,u)
+```
+
+## 2. Split data in training and validation data.
+```{r}
+#Draw row numbers randomly:
+set.seed(90)
+trainRow = sample(1:nrow(data),0.8*nrow(data))
+
+#Set training- and validation data
+train = data[c(trainRow), ]
+validation <- data[-c(trainRow),]
+```
+
+## 3. Plot
+Now we are going to plot the true regression line and the training data.
+```{r}
+ggplot(data, aes(x, y)) + geom_smooth(method = 'loess',se=FALSE) + geom_point(data = train, aes(x,y))
+
+```
+
+## 4. Code help-functions.
+Now let's code two help-functions. One will compute the MSE of two variables and the other one will compute test error by using cross-validation
+approach.
+```{r}
+calc_mse<-function(y_actual,y_predict){
+  #compute MSE
+  n = length(y_actual)
+  MSE = (1/n) * sum((y_actual-y_predict)^2)
+  
+  return(MSE)
+}
+```
+
+```{r}
+#function that will return the test error by using cross-validation
+my.kfold<-function(model,data,K){
+  MSE = c()
+  n = nrow(data)
+  percentage = 1/K
+  if (K>n){
+    print("Data can not be split evenly into K parts")
+    CV_error = NA
+  }
+  else{
+    #draw for each K row numbers:
+    split_nrows = split(sample(1:n), 1:K)
+
+  for (i in 1:K){
+    #divide for each iteration the data in training and validation set:
+    train_nrow = as.vector(unlist(split_nrows[-i]))
+    train_data = data[train_nrow,]
+    validation_data = data[-train_nrow,]
+    
+    #fit model for training data:
+    lm.fit = update(model, data = train_data)
+    
+    #compute mse with validation set:
+    MSE[i] = calc_mse(validation_data[,2],predict(lm.fit,data)[-train_nrow])
+  }
+  
+  CV_error = sum(MSE)/K
+  }
+  return(CV_error)
+}
+```
+
+
+## 5. Simulation study
+Compare polynomial fits of orders one to ten by using validation set and cross-validation
+methods (K=10). Also I will show why you should not use training data set to evaluate the model.
+I will set the number of replication to 100.
+```{r}
+replication = 100
+poly_degree = 10
+n = 200
+#generate a list that will contain training errors, validation errors and cross validation errors for each replication:
+error_collection_training = data.frame(matrix(ncol = replication, nrow = poly_degree))
+error_collection_val_approach = data.frame(matrix(ncol = replication, nrow = poly_degree))
+error_collection_cv = data.frame(matrix(ncol = replication, nrow = poly_degree))
+error_collection = list("training"= error_collection_training, "vsa" = error_collection_val_approach, "cv"=error_collection_cv)
+
+#list will contain all the chosen polynomial degree based on training MSEs, validation set approach MSEs and CV errors:
+min_error_collection = list("training"=c(), "vs"=c(),"cv"=c())
+
+#Start simulation
+set.seed(90)
+for (j in 1:replication){
+  #simulate data and set training and validation set:
+  #generate random variables
+  x <- sort(rnorm(200, mean = 0, sd = 1))
+  u <- rnorm(200, mean = 0, sd = 1)
+  data <- gen_samples(x,u)
+  trainRow = sample(1:nrow(data),0.8*nrow(data))
+  train = data[c(trainRow), ]
+  validation <- data[-c(trainRow),]
+  
+  for (k in 1:poly_degree){
+    #fit the model:
+    model = lm(y ~poly(x, k,raw = TRUE), data = data)
+    #fit the model with training data:
+    lm.fit = update(model,data = train)
+    
+    #MSE of training data for each polynomial degree:
+    error_collection[[1]][k,j] = calc_mse(train[,2],predict(lm.fit,data)[trainRow])
+    
+    #Validation set approach MSE:
+    error_collection[[2]][k,j] = calc_mse(validation[,2],predict(lm.fit, data)[-trainRow])
+    
+    #CV error:
+    error_collection[[3]][k,j] = my.kfold(model,data,10)
+  }
+  #choose the polynomial with the lowest MSE or. CV error:
+  min_error_collection[[1]][j] = which.min(error_collection[[1]][,j])
+  min_error_collection[[2]][j] = which.min(error_collection[[2]][,j])
+  min_error_collection[[3]][j] = which.min(error_collection[[3]][,j])
+}
+
+
+
+
+```
+
+Creating a table for the results.
+The rows will contain the polynomial order and the columns the mean and standard deviation of the training erro, validation error and cross-validation error.
+```{r}
+result = matrix(NA,ncol = 6, nrow = poly_degree)
+colnames(result) = c( "Mean ,Train ","SD, Train "," Mean, VS "," SD, VS ", "Mean, CV ", "SD, CV")
+row.names(result) = 1:poly_degree
+ 
+for (l in 1:poly_degree) {
+  result[l,1] = sum(error_collection[[1]][l,])/replication
+  result[l,2] = sd(error_collection[[1]][l,])
+  result[l,3] = sum(error_collection[[2]][l,])/replication
+  result[l,4] = sd(error_collection[[2]][l,])
+  result[l,5] = sum(error_collection[[3]][l,])/replication
+  result[l,6] = sd(error_collection[[3]][l,])
+}
+result
+```
+
+This table displays the phenomena over- and underfitting. 
+The first row of the table displays the polynomial degrees. Polynomial degrees can be seen as degree of freedoms. It is a quantity that summarizes the flexibility of a curve. More flexibility means in general higher variance, that means a slight change in the training data can result in larg changes in the predicted output. This will yield a high test error whereas the training error will still be low, since most statistical models (especially linear regression) always try to minimize the training error. This phenomena is called overfitting.
+
+Taking a look at the table, we can see that the mean training error monotonically decreases where as the test error (VS error and 10-fold CV error) increases after reaching the polynomial degree of 3 (the true function).
+
+```{r}
+plot_data = as.data.frame(cbind(result[,1],result[,3], result[,5]))
+colnames(plot_data) <- c("training_error","VS-error","10-fold CV error")
+plot_data['poly_degree'] <- 1:10
+
+#reshape data for plotting
+plot_data = reshape2::melt(plot_data, id.var='poly_degree')
+names(plot_data)[3] <- 'error'
+#plot
+ggplot(plot_data, aes(x=poly_degree, y=error, col=variable)) + geom_line()
+
+```
+
+
+---------------------------------------------------------------------------------
+Now let's check how many times (out of 100) training error, validation set error and CV error choose polynomial degrees from 1 to 10 based on training.
+
+```{r}
+library(gridExtra)
+min_error_collection = as.data.frame(min_error_collection)
+par(mfrow=c(1,3))
+p1 = ggplot(min_error_collection, aes(x=training)) + geom_histogram(breaks=seq(1, 10, by=1),fill=I("blue"), col=I("red")) + labs(title= "Training error",y="Times chosen", x = "Polynomial Degree")
+
+p2 = ggplot(min_error_collection, aes(x=vs)) + geom_histogram(breaks=seq(1, 10, by=1),fill=I("blue"), col =I("red")) + labs(title= "Validation set",y="Times chosen", x = "Polynomial Degree")
+
+p3 = ggplot(min_error_collection, aes(x=cv)) + geom_histogram(breaks=seq(1, 10, by=1),fill=I("blue"), col=I("red")) + labs(title= "10-fold CV",y="Times chosen", x = "Polynomial Degree")
+
+grid.arrange(p1, p2, p3, nrow = 1)
+
+
+```
+
+```{r}
+fraction_vsa = sum(min_error_collection[[2]]==3)*100/replication
+fraction_cv = sum(min_error_collection[[3]]==3)*100/replication
+
+cat("We know our model has polynomial degree 3. So we can obviously see in the histogram that using the training data for testing, is not a good idea. For the validation set approach we have a ",fraction_vsa,"% chance to choose the right model. On the other hand, for cross-validation there is a",fraction_cv," % chance. Hence 10-fold cross-validation is a better choice")
+
+```
+
